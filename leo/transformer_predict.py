@@ -1,4 +1,3 @@
-import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -29,7 +28,6 @@ def log(message=""):
     print(message, end = "")
     print(f"\t elapsed: {time.time() - last_logged:.2f}s", end="\n\n")
     last_logged = time.time()
-
 
 
 class TransformerModel(nn.Module):
