@@ -13,20 +13,27 @@ from sklearn.metrics import multilabel_confusion_matrix
 from sentence_transformers import SentenceTransformer
 from transformers import RobertaModel, RobertaTokenizer
 
-device = torch.device("cpu")
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 ##################################################################################################################################initialize
 
+code_size=768
+hidden_size1=512
+hidden_size2=256
+description_size=384
+hidden_size3=640
+hidden_size4=256
+num_layers=2
 
 class MyCNN(nn.Module):
     def __init__(self):
         super(MyCNN, self).__init__()
         self.conv0 = nn.Conv1d(in_channels=512, out_channels=512, kernel_size=3, padding=1)
-        self.conv1 = nn.Conv1d(in_channels=768, out_channels=512, kernel_size=3, padding=1)
-        self.conv2 = nn.Conv1d(in_channels=512, out_channels=256, kernel_size=3, padding=1)
-        self.conv3 = nn.Conv1d(in_channels=640, out_channels=256, kernel_size=3, padding=1)
-        self.conv4 = nn.Conv1d(in_channels=256, out_channels=1, kernel_size=3, padding=1)
+        self.conv1 = nn.Conv1d(in_channels=code_size, out_channels=hidden_size1, kernel_size=3, padding=1)
+        self.conv2 = nn.Conv1d(in_channels=hidden_size1, out_channels=hidden_size2, kernel_size=3, padding=1)
+        self.conv3 = nn.Conv1d(in_channels=hidden_size3, out_channels=hidden_size4, kernel_size=3, padding=1)
+        self.conv4 = nn.Conv1d(in_channels=hidden_size4, out_channels=1, kernel_size=3, padding=1)
         self.flatten = nn.Flatten(start_dim=1)
 
     def forward(self, x,sentence_inputs):
@@ -60,6 +67,7 @@ class MyFullyConnected(nn.Module):
         x = self.fc2(x)
         return x
 
+
 class CombinedModel(nn.Module):
     def __init__(self):
         super(CombinedModel, self).__init__()
@@ -81,7 +89,79 @@ class BugReportDataset(Dataset):
 
     def __getitem__(self, idx):
         return self.data[idx], self.labels[idx]
-######################################################################################################################################Models
+######################################################################################################################################oldModels
+
+class FirstCNN(nn.Module):
+    def __init__(self):
+        super(FirstCNN, self).__init__()
+        self.conv0 = nn.Conv1d(in_channels=512, out_channels=512, kernel_size=3, padding=1)
+        self.conv1 = nn.Conv1d(in_channels=code_size, out_channels=hidden_size1, kernel_size=3, padding=1)
+    
+    def forward(self, x,sentence_inputs):
+        x = self.conv0(x)
+        x = x.transpose(1, 2)  # (batch_size, 768, 512)
+        x = self.conv1(x)  # (batch_size, 512, 512)
+    
+class FirstLSTM(nn.Module):
+    def __init__(self, input_size, hidden_size, num_layers):
+        super(FirstLSTM, self).__init__()
+        self.lstm = nn.LSTM(input_size, hidden_size, num_layers, batch_first=True)
+        
+
+    def forward(self, x):
+        x, _ = self.lstm(x)
+        x = x.transpose(1, 2)
+        return x
+
+class MiddleCNN(nn.Module):
+    def __init__(self):
+        super(MiddleCNN, self).__init__()
+        self.conv2 = nn.Conv1d(in_channels=hidden_size1, out_channels=hidden_size2, kernel_size=3, padding=1)
+        self.conv3 = nn.Conv1d(in_channels=hidden_size3, out_channels=hidden_size4, kernel_size=3, padding=1)
+        self.conv4 = nn.Conv1d(in_channels=hidden_size4, out_channels=1, kernel_size=3, padding=1)
+        self.flatten = nn.Flatten(start_dim=1)
+                                  
+    def forward(self, x, sentence_inputs):
+        x = self.conv2(x)  # (batch_size, 256, 512)
+        x = x.transpose(1, 2) # (batch_size, 512, 256)
+        # 新しい次元を追加
+        tensor = sentence_inputs.unsqueeze(1)  # batch_size x 1 x 384
+        # 新しい次元を512に繰り返す
+        tensor = tensor.repeat(1, 512, 1)  # batch_size x 512 x 384
+        x = torch.cat((x,tensor),dim=2)  #(batch_size, 512, 384+256=640)
+        x = x.transpose(1, 2)  # (batch_size, 640, 512)
+        x = self.conv3(x)  # (batch_size, 256, 512)
+        x = self.conv4(x)
+        x = x.squeeze(1)  # (batch_size, 512)
+        return x
+
+
+class CombinedModel_CNN(nn.Module):
+    def __init__(self):
+        super(CombinedModel_CNN,self).__init__()
+        self.first=FirstCNN()
+        self.middle=MiddleCNN()
+        self.fc=MyFullyConnected()
+
+    def forward(self, x, sentence_inputs):
+        x=self.first(x)
+        x=self.middle(x,sentence_inputs)
+        x=self.fc(x)
+        return x
+    
+class CombinedModel_LSTM(nn.Module):
+    def __init__(self):
+        super(CombinedModel_LSTM,self).__init__()
+        self.first=FirstLSTM(code_size,hidden_size1,num_layers)
+        self.middle=MiddleCNN()
+        self.fc=MyFullyConnected()
+
+    def forward(self, x, sentence_inputs):
+        x=self.first(x) #input_size:768, hidden_size=512, layer=2
+        x=self.middle(x,sentence_inputs)
+        x=self.fc(x)
+        return x
+######################################################################################################################################newModels
 def pos_weight(labels):
     negative=0
     positive=0
@@ -183,7 +263,7 @@ def code_to_vec(codes,model,tokenizer):
     return data_tensor
 
 
-def Learning(codes,descriptions,labels,epoch):
+def Learning(codes,descriptions,labels,epoch,model):
     labels = torch.tensor(labels)
     data_num=len(codes)
     rate=2 / 3
@@ -192,7 +272,6 @@ def Learning(codes,descriptions,labels,epoch):
     train_descriptions,valid_descriptions=train_valid(descriptions,threshold)
     train_labels,valid_labels=train_valid(labels,threshold)
     divideNumber=4
-    model = CombinedModel().to(device)
     for i in range(epoch):
         i+=1
         partLearning(model,train_codes,train_descriptions,train_labels,divideNumber,True,i)
@@ -281,7 +360,8 @@ def load_data(name):
 
 name='inputs_2024-7-21-2.csv'
 codes,descriptions,labels=load_data(name)
-Learning(codes,descriptions,labels,4)
+model = CombinedModel_LSTM().to(device)
+Learning(codes,descriptions,labels,4,model)
 
 
 ############################################################################################################################################code
