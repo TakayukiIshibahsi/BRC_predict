@@ -208,7 +208,8 @@ def evaluate_model(model, data_loader,sentence_inputs):
             outputs = model(inputs,sentence_inputs)
             loss = criterion(outputs, labels.float())
             running_loss += loss.item()
-            predicted = (torch.sigmoid(outputs) > 0.5).float()
+            threshold=0.5
+            predicted = (torch.sigmoid(outputs) > threshold).float()
             total += labels.size(0)
             correct += (predicted == labels).sum().item()
             
@@ -316,7 +317,8 @@ def partLearning(model,codes,descriptions,labels,divideNumber,train,order):
         sum_tp+=tp
         sum_loss+=loss
 
-    
+    model_path=f'./model_{order}'
+    torch.save(model.to('cpu').state_dict(), model_path)
     save_data(sum_tn,sum_fn,sum_fp,sum_tp,total,sum_loss,order,train)
             
 
@@ -357,7 +359,17 @@ def load_data(name):
 
 ###########################################################################################################################################data
 
+def predict(model):
+    print("please input your code")
+    code=input()
+    print("please input your description")
+    description=input()
+    outputs = model([code],[description])
+    threshold=0.5
+    predicted = (torch.sigmoid(outputs) > threshold).float()
+    return predicted
 
+###########################################################################################################################################use
 name='inputs_2024-7-21-2.csv'
 codes,descriptions,labels=load_data(name)
 model = CombinedModel_LSTM().to(device)
